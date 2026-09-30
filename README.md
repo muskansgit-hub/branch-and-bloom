@@ -1,6 +1,6 @@
 # Branch & Bloom
 
-A personal branching AI conversation workspace with a light green and baby pink interface. Runs on your computer with Python, SQLite and Ollama. No paid API, hosted database, account, or JavaScript build step is required.
+A personal branching AI conversation workspace. Runs on your computer with Python, SQLite and Ollama. No paid API, hosted database, account, or JavaScript build step is required.
 
 ## Get the source
 
