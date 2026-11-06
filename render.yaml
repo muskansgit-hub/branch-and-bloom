@@ -1,0 +1,10 @@
+# Render Blueprint: Dashboard -> New -> Blueprint -> pick this repo.
+# This hosts the app WITHOUT an AI model: workspaces, branching, the map view,
+# notes, compare/merge and export all work; "Reply to saved prompt" needs a model.
+# Optional after deploying: Environment tab -> add BLOOM_PASSWORD (any username works).
+# See DEPLOY_GUIDE.md for ways to add a model.
+services:
+  - type: web
+    name: branch-and-bloom
+    runtime: docker
+    plan: free
