@@ -1,5 +1,6 @@
 """Branch & Bloom: a local, single-user conversation workspace. Python 3.10+."""
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -18,6 +19,10 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get('BLOOM_DB', str(ROOT / 'data' / 'bloom.sqlite3')))
 OLLAMA = os.environ.get('OLLAMA_URL', 'http://127.0.0.1:11434').rstrip('/')
+# Optional hosting settings. Defaults keep the original local-only behaviour.
+HOST = os.environ.get('BLOOM_HOST', '127.0.0.1')  # use 0.0.0.0 inside a container
+PUBLIC_HOSTS = {h.strip().lower() for h in os.environ.get('BLOOM_PUBLIC_HOSTS', '').split(',') if h.strip()}  # e.g. my-app.onrender.com
+PASSWORD = os.environ.get('BLOOM_PASSWORD', '')  # when set, every request needs HTTP Basic auth (any username)
 TOKEN = secrets.token_urlsafe(32)
 LOCK = threading.RLock()
 BUSY = set()
@@ -160,13 +165,26 @@ class Handler(BaseHTTPRequestHandler):
     def reply(self, data, status=200):
         raw = json.dumps(data, ensure_ascii=False).encode()
         self.send_response(status); self.headers_common(); self.send_header('Content-Type','application/json; charset=utf-8'); self.send_header('Content-Length',str(len(raw))); self.end_headers(); self.wfile.write(raw)
+    def authorized(self):
+        if not PASSWORD: return True
+        auth = self.headers.get('Authorization','')
+        if auth[:6].lower() == 'basic ':
+            try: supplied = base64.b64decode(auth[6:]).decode().partition(':')[2]
+            except ValueError: supplied = ''
+            if secrets.compare_digest(supplied.encode(), PASSWORD.encode()): return True
+        raw = b'Password required.'
+        self.send_response(401); self.send_header('WWW-Authenticate','Basic realm="Branch and Bloom"'); self.send_header('Content-Type','text/plain; charset=utf-8'); self.send_header('Content-Length',str(len(raw))); self.end_headers(); self.wfile.write(raw)
+        return False
     def check(self, write=False):
         host = self.headers.get('Host','')
-        if host not in (f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}'): raise PermissionError('Only local access is allowed.')
+        port = self.server.server_port
+        if host not in (f'127.0.0.1:{port}', f'localhost:{port}') and host.lower() not in PUBLIC_HOSTS: raise PermissionError('Only local access is allowed.')
         origin = self.headers.get('Origin')
-        if origin and origin not in (f'http://127.0.0.1:{self.server.server_port}',f'http://localhost:{self.server.server_port}'): raise PermissionError('Cross-site requests are blocked.')
+        allowed = {f'http://127.0.0.1:{port}', f'http://localhost:{port}'} | {f'https://{h}' for h in PUBLIC_HOSTS}
+        if origin and origin not in allowed: raise PermissionError('Cross-site requests are blocked.')
         if write and not secrets.compare_digest(self.headers.get('X-Bloom-Token',''), TOKEN): raise PermissionError('Reload the app to renew your local session.')
     def do_GET(self):
+        if not self.authorized(): return
         try:
             self.check()
             path = urlparse(self.path).path
@@ -188,6 +206,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as e: self.reply({'error':str(e)},404)
         except (BrokenPipeError,ConnectionResetError): pass
     def do_POST(self):
+        if not self.authorized(): return
         try:
             self.check(True)
             size = int(self.headers.get('Content-Length',0))
@@ -340,12 +359,12 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK: BUSY.discard(bid)
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--port',type=int,default=8765);args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--port',type=int,default=int(os.environ.get('PORT',8765)));args=parser.parse_args()
     init_db()
     with connect() as db:
         if not db.execute('SELECT 1 FROM workspaces LIMIT 1').fetchone(): seed(db)
-    server=ThreadingHTTPServer(('127.0.0.1',args.port),Handler)
-    print(f'Branch & Bloom is ready at http://127.0.0.1:{args.port}',flush=True)
+    server=ThreadingHTTPServer((HOST,args.port),Handler)
+    print(f'Branch & Bloom is ready at http://{HOST}:{args.port}',flush=True)
     try: server.serve_forever()
     except KeyboardInterrupt: server.server_close()
 
